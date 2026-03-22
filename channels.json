@@ -1,4 +1,13 @@
 {
-  "channels": [],
+  "channels": [
+    {
+      "id": "1",
+      "name": "adwalo",
+      "displayName": "adwalo",
+      "addedAt": 1700000000000,
+      "lastSeen": null,
+      "isLive": false
+    }
+  ],
   "pending": []
 }
