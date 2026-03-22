@@ -5,7 +5,7 @@ Runs on GitHub Actions cron schedule.
 1. Reads channels.json (source of truth for tracked channels)
 2. Calls Twitch API for live status, viewer counts, thumbnails
 3. Writes data.json which the React board reads
-4. Posts rich per-streamer embeds to Discord webhook
+4. Posts rich embeds to Discord — edits the same message each run (no spam)
 """
 
 import json
@@ -18,10 +18,11 @@ TWITCH_CLIENT_ID     = os.environ["TWITCH_CLIENT_ID"]
 TWITCH_CLIENT_SECRET = os.environ["TWITCH_CLIENT_SECRET"]
 DISCORD_WEBHOOK_URL  = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
-CHANNELS_FILE = "channels.json"
-DATA_FILE     = "data.json"
+CHANNELS_FILE  = "channels.json"
+DATA_FILE      = "data.json"
+MESSAGE_ID_FILE = "discord_message_id.txt"
 
-# ── Twitch helpers ───────────────────────────────────────────────────────────
+# ── Twitch helpers ────────────────────────────────────────────────────────────
 
 def get_token():
     r = requests.post(
@@ -51,7 +52,7 @@ def fetch_twitch_data(channel_names, token):
     if not channel_names:
         return {}
 
-    chunks  = [channel_names[i:i+100] for i in range(0, len(channel_names), 100)]
+    chunks = [channel_names[i:i+100] for i in range(0, len(channel_names), 100)]
     users, streams = [], []
 
     for chunk in chunks:
@@ -82,7 +83,7 @@ def fetch_twitch_data(channel_names, token):
     return result
 
 
-# ── File helpers ─────────────────────────────────────────────────────────────
+# ── File helpers ──────────────────────────────────────────────────────────────
 
 def read_json(path, default):
     try:
@@ -98,6 +99,20 @@ def write_json(path, data):
     print(f"  ✓ wrote {path}")
 
 
+def read_message_id():
+    try:
+        with open(MESSAGE_ID_FILE, "r") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return None
+
+
+def write_message_id(message_id):
+    with open(MESSAGE_ID_FILE, "w") as f:
+        f.write(str(message_id))
+    print(f"  ✓ saved message ID: {message_id}")
+
+
 # ── Discord helpers ───────────────────────────────────────────────────────────
 
 def format_viewers(n):
@@ -109,42 +124,41 @@ def format_viewers(n):
 def time_ago(iso_str):
     if not iso_str:
         return "Never"
-    diff  = datetime.now(timezone.utc) - datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-    mins  = int(diff.total_seconds() / 60)
-    if mins < 1:   return "Just now"
-    if mins < 60:  return f"{mins}m ago"
+    diff = datetime.now(timezone.utc) - datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+    mins = int(diff.total_seconds() / 60)
+    if mins < 1:  return "Just now"
+    if mins < 60: return f"{mins}m ago"
     hrs = mins // 60
-    if hrs  < 24:  return f"{hrs}h ago"
+    if hrs < 24:  return f"{hrs}h ago"
     return f"{hrs // 24}d ago"
 
 
-def build_discord_embeds(channels, updated_at):
+def build_embeds(channels):
     """
-    Build rich Discord embeds:
-    - One embed per LIVE channel with thumbnail, game, title, viewer count
-    - One combined embed for all offline channels
-    - A footer embed with timestamp and board link
+    One embed per channel — live and offline.
+    Live:    red left bar, stream thumbnail as image, pfp as thumbnail
+    Offline: grey left bar, pfp as thumbnail
+    Footer:  purple summary bar with live count and timestamp
     """
     embeds = []
     live    = [c for c in channels if c.get("isLive")]
     offline = [c for c in channels if not c.get("isLive")]
 
-    # ── Live channel embeds ──────────────────────────────────────────────────
+    # ── Live channel embeds ───────────────────────────────────────────────────
     for ch in live:
         twitch_url = f"https://twitch.tv/{ch['name']}"
         viewers    = format_viewers(ch.get("viewers", 0))
 
-        # Build description lines
         desc_lines = []
         if ch.get("game"):
             desc_lines.append(f"🎮  **{ch['game']}**")
         if ch.get("title"):
             desc_lines.append(f"_{ch['title']}_")
-        desc_lines.append(f"")
+        desc_lines.append("")
         desc_lines.append(f"[**Watch Now →**]({twitch_url})")
 
         embed = {
-            "color": 0xEB0400,  # live red
+            "color":  0xEB0400,
             "author": {
                 "name":     f"● LIVE  •  {ch.get('displayName', ch['name'])}  •  {viewers} viewers",
                 "url":      twitch_url,
@@ -154,72 +168,108 @@ def build_discord_embeds(channels, updated_at):
             "url": twitch_url,
         }
 
-        # Attach stream thumbnail if available
+        # Profile picture as right-side thumbnail
+        if ch.get("profileImage"):
+            embed["thumbnail"] = {"url": ch["profileImage"]}
+
+        # Stream thumbnail as full-width image
         if ch.get("thumbnailUrl"):
             embed["image"] = {"url": ch["thumbnailUrl"]}
 
         embeds.append(embed)
 
-    # ── Offline summary embed ────────────────────────────────────────────────
-    if offline:
-        offline_lines = []
-        for ch in offline:
-            last = time_ago(ch.get("lastSeen"))
-            offline_lines.append(
-                f"⚫  **{ch.get('displayName', ch['name'])}**  —  last seen {last}  •  "
-                f"[twitch.tv/{ch['name']}](https://twitch.tv/{ch['name']})"
-            )
+    # ── Offline channel embeds — one per channel with pfp ────────────────────
+    for ch in offline:
+        twitch_url = f"https://twitch.tv/{ch['name']}"
+        last       = time_ago(ch.get("lastSeen"))
 
-        embeds.append({
-            "color":       0x4E5058,  # discord grey
-            "title":       "Offline",
-            "description": "\n".join(offline_lines),
-        })
+        embed = {
+            "color": 0x4E5058,
+            "author": {
+                "name":     f"⚫  {ch.get('displayName', ch['name'])}  —  Offline",
+                "url":      twitch_url,
+                "icon_url": ch.get("profileImage") or "",
+            },
+            "description": f"Last seen {last}  •  [twitch.tv/{ch['name']}]({twitch_url})",
+        }
 
-    # ── Footer / summary embed ───────────────────────────────────────────────
+        # Profile picture as right-side thumbnail for offline too
+        if ch.get("profileImage"):
+            embed["thumbnail"] = {"url": ch["profileImage"]}
+
+        embeds.append(embed)
+
+    # ── Summary footer embed ──────────────────────────────────────────────────
     live_count = len(live)
     total      = len(channels)
     now_str    = datetime.now(timezone.utc).strftime("%I:%M %p UTC")
 
     embeds.append({
-        "color":       0x9147FF,  # twitch purple
-        "description": (
-            f"**{live_count}/{total}** channels live right now\n"
-            f"Updated {now_str}  •  [View full board](https://danjoshua56-droid.github.io/Disc-Stream-Board/)"
-        ),
+        "color":       0x9147FF,
+        "description": f"**{live_count}/{total}** channels live  •  Updated {now_str}",
     })
 
     return embeds
 
 
-def post_discord(channels, updated_at):
+def get_webhook_id_token():
+    """Extract webhook ID and token from the webhook URL."""
+    # URL format: https://discord.com/api/webhooks/{id}/{token}
+    parts = DISCORD_WEBHOOK_URL.rstrip("/").split("/")
+    return parts[-2], parts[-1]
+
+
+def post_or_edit_discord(channels):
     if not DISCORD_WEBHOOK_URL:
-        print("  ⚠ DISCORD_WEBHOOK_URL not set — skipping Discord post")
+        print("  ⚠ DISCORD_WEBHOOK_URL not set — skipping")
         return
 
     live_count = sum(1 for c in channels if c.get("isLive"))
+    embeds     = build_embeds(channels)
+    content    = (
+        f"📡  **Stream update** — {live_count} live right now"
+        if live_count > 0
+        else "📡  **Stream update** — nobody live right now"
+    )
 
-    # Only post if there's something worth reporting
-    if not channels:
-        print("  No channels to report — skipping Discord post")
-        return
-
-    embeds  = build_discord_embeds(channels, updated_at)
     payload = {
-        "username":   "Stream Board",
-        "avatar_url": "https://brand.twitch.tv/assets/images/black_glitch_wordmark.png",
-        "content":    f"📡  **Stream update** — {live_count} live right now" if live_count > 0 else "📡  **Stream update** — nobody live right now",
-        "embeds":     embeds[:10],  # Discord max 10 per message
+        "username": "Stream Board",
+        "content":  content,
+        "embeds":   embeds[:10],
     }
 
-    r = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+    existing_id = read_message_id()
+    wh_id, wh_token = get_webhook_id_token()
+
+    if existing_id:
+        # Try to edit the existing message
+        edit_url = f"https://discord.com/api/webhooks/{wh_id}/{wh_token}/messages/{existing_id}"
+        r = requests.patch(edit_url, json=payload, timeout=10)
+
+        if r.status_code == 200:
+            print(f"  ✓ Discord message edited — {live_count} live")
+            return
+        else:
+            # Message was deleted or expired — fall through to post new
+            print(f"  ⚠ Edit failed ({r.status_code}) — posting new message")
+
+    # Post a new message and save its ID
+    r = requests.post(
+        f"{DISCORD_WEBHOOK_URL}?wait=true",
+        json=payload,
+        timeout=10,
+    )
+
     if r.status_code in (200, 204):
-        print(f"  ✓ Discord posted — {live_count} live")
+        msg_id = r.json().get("id")
+        if msg_id:
+            write_message_id(msg_id)
+        print(f"  ✓ Discord message posted — {live_count} live")
     else:
-        print(f"  ✗ Discord failed: {r.status_code} {r.text}", file=sys.stderr)
+        print(f"  ✗ Discord post failed: {r.status_code} {r.text}", file=sys.stderr)
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     print("── stream_check.py ──")
@@ -237,7 +287,7 @@ def main():
         })
         return
 
-    print(f"  Fetching Twitch token…")
+    print("  Fetching Twitch token…")
     token = get_token()
 
     names = [c["name"].lower() for c in channels]
@@ -263,19 +313,14 @@ def main():
             "lastSeen":     now if td.get("isLive") else ch.get("lastSeen"),
         }
         updated_channels.append(merged)
-        status = "🔴 LIVE" if merged["isLive"] else "⚫ offline"
-        viewers_str = f" ({format_viewers(merged['viewers'])} viewers)" if merged["isLive"] else ""
-        print(f"    {merged['displayName']}: {status}{viewers_str}")
+        status      = "🔴 LIVE" if merged["isLive"] else "⚫ offline"
+        viewer_str  = f" ({format_viewers(merged['viewers'])} viewers)" if merged["isLive"] else ""
+        print(f"    {merged['displayName']}: {status}{viewer_str}")
 
-    write_json(DATA_FILE, {
-        "channels":  updated_channels,
-        "pending":   pending,
-        "updatedAt": now,
-    })
-
+    write_json(DATA_FILE, {"channels": updated_channels, "pending": pending, "updatedAt": now})
     write_json(CHANNELS_FILE, {"channels": updated_channels, "pending": pending})
 
-    post_discord(updated_channels, now)
+    post_or_edit_discord(updated_channels)
 
     live_count = sum(1 for c in updated_channels if c.get("isLive"))
     print(f"  Done — {live_count}/{len(updated_channels)} live")
