@@ -1,5 +1,20 @@
 {
-  "channels": [],
+  "channels": [
+    {
+      "id": "1",
+      "name": "adwalo",
+      "displayName": "Adwalo",
+      "addedAt": 1700000000000,
+      "lastSeen": null,
+      "isLive": false,
+      "profileImage": "https://static-cdn.jtvnw.net/jtv_user_pictures/3644192e-606a-4736-b5f5-580b7dac5f32-profile_image-300x300.png",
+      "title": "",
+      "game": "",
+      "viewers": 0,
+      "thumbnailUrl": null,
+      "startedAt": null
+    }
+  ],
   "pending": [],
-  "updatedAt": "2026-03-22T07:07:42.528779+00:00"
+  "updatedAt": "2026-03-22T07:13:26.279875+00:00"
 }
