@@ -5,16 +5,16 @@
       "name": "adwalo",
       "displayName": "Adwalo",
       "addedAt": 1700000000000,
-      "lastSeen": null,
-      "isLive": false,
+      "lastSeen": "2026-03-26T05:51:18.655933+00:00",
+      "isLive": true,
       "profileImage": "https://static-cdn.jtvnw.net/jtv_user_pictures/3644192e-606a-4736-b5f5-580b7dac5f32-profile_image-300x300.png",
-      "title": "",
-      "game": "",
-      "viewers": 0,
-      "thumbnailUrl": null,
-      "startedAt": null
+      "title": "Tekken 8 is an AutoPlayer Game",
+      "game": "TEKKEN 8",
+      "viewers": 1,
+      "thumbnailUrl": "https://static-cdn.jtvnw.net/previews-ttv/live_user_adwalo-440x248.jpg",
+      "startedAt": "2026-03-26T05:38:13Z"
     }
   ],
   "pending": [],
-  "updatedAt": "2026-03-25T23:52:21.962688+00:00"
+  "updatedAt": "2026-03-26T05:51:18.655933+00:00"
 }
